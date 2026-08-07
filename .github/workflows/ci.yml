@@ -22,12 +22,20 @@ jobs:
         id: preflight
         run: |
           active=$(gh run list --workflow ci.yml --status in_progress --json databaseId --repo ${{ github.repository }} 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+          event="${{ github.event_name }}"
 
-          if [ "$active" -gt 2 ]; then
-            echo "Environment busy ($active active). Exiting."
+          echo "Active runs: $active | Trigger: $event"
+
+          # Cron is a backup — only start if NO runs are active
+          if [ "$event" = "schedule" ] && [ "$active" -gt 1 ]; then
+            echo "Backup trigger not needed ($active already active). Skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          # Self-restart allows overlap (max 2 concurrent for handoff)
+          elif [ "$active" -gt 2 ]; then
+            echo "Environment busy ($active active). Skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Environment ready ($active active)."
+            echo "Environment ready."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
         env:
