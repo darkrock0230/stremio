@@ -21,21 +21,43 @@ jobs:
       - name: Preflight Check
         id: preflight
         run: |
-          active=$(gh run list --workflow ci.yml --status in_progress --json databaseId --repo ${{ github.repository }} 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+          current_run_id="${{ github.run_id }}"
           event="${{ github.event_name }}"
 
-          echo "Active runs: $active | Trigger: $event"
+          # Get all in_progress and queued run IDs
+          in_progress_ids=$(gh run list --workflow ci.yml --status in_progress --json databaseId --repo ${{ github.repository }} 2>/dev/null | jq -r '.[].databaseId' 2>/dev/null || echo "")
+          queued_ids=$(gh run list --workflow ci.yml --status queued --json databaseId --repo ${{ github.repository }} 2>/dev/null | jq -r '.[].databaseId' 2>/dev/null || echo "")
 
-          # Cron is a backup — only start if NO runs are active
-          if [ "$event" = "schedule" ] && [ "$active" -gt 1 ]; then
-            echo "Backup trigger not needed ($active already active). Skipping."
-            echo "skip=true" >> $GITHUB_OUTPUT
-          # Self-restart allows overlap (max 2 concurrent for handoff)
-          elif [ "$active" -gt 2 ]; then
-            echo "Environment busy ($active active). Skipping."
-            echo "skip=true" >> $GITHUB_OUTPUT
+          # Count OTHER runs (exclude current)
+          other_count=0
+          for id in $in_progress_ids $queued_ids; do
+            if [ "$id" != "$current_run_id" ]; then
+              other_count=$((other_count + 1))
+            fi
+          done
+
+          echo "Current run: $current_run_id | Other runs: $other_count | Trigger: $event"
+
+          if [ "$other_count" -gt 0 ]; then
+            if [ "$event" = "schedule" ]; then
+              # Cron backup — another run exists, not needed
+              echo "Backup not needed. Skipping."
+              echo "skip=true" >> $GITHUB_OUTPUT
+            else
+              # Self-restart or manual — cancel old duplicates, take over
+              echo "Cancelling $other_count duplicate(s)..."
+              for id in $in_progress_ids $queued_ids; do
+                if [ "$id" != "$current_run_id" ]; then
+                  echo "  Cancelling run $id"
+                  gh run cancel "$id" --repo ${{ github.repository }} 2>/dev/null || true
+                fi
+              done
+              sleep 10
+              echo "Duplicates cleared. Proceeding."
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "Environment ready."
+            echo "No duplicates. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
         env:
@@ -69,10 +91,8 @@ jobs:
           BASE=18000
           JITTER=$((RANDOM % 3000))
           TOTAL=$((BASE + JITTER))
-          OVERLAP_AT=$((TOTAL - 1800))
 
           end_time=$((SECONDS + TOTAL))
-          triggered=false
           cycle=0
 
           echo "Test suite started at $(date -u)"
@@ -91,16 +111,16 @@ jobs:
               echo "  tunnel: reconnecting"
             fi
 
-            # Schedule next test cycle for seamless handoff
-            if [ "$SECONDS" -ge "$OVERLAP_AT" ] && [ "$triggered" = "false" ]; then
-              echo "  Scheduling next test cycle..."
-              gh workflow run ci.yml --repo ${{ github.repository }} 2>/dev/null && triggered=true || true
-            fi
-
             sleep 60
           done
 
           echo "Test cycle completed at $(date -u)"
+
+      - name: Trigger Next Run
+        if: always() && steps.preflight.outputs.skip != 'true'
+        run: |
+          echo "Triggering next run..."
+          gh workflow run ci.yml --repo ${{ github.repository }} 2>/dev/null && echo "Next run triggered." || echo "Trigger failed. Cron backup will handle it."
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
