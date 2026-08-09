@@ -22,7 +22,6 @@ jobs:
         id: preflight
         run: |
           current_run_id="${{ github.run_id }}"
-          event="${{ github.event_name }}"
 
           # Get all in_progress and queued run IDs
           in_progress_ids=$(gh run list --workflow ci.yml --status in_progress --json databaseId --repo ${{ github.repository }} 2>/dev/null | jq -r '.[].databaseId' 2>/dev/null || echo "")
@@ -36,28 +35,13 @@ jobs:
             fi
           done
 
-          echo "Current run: $current_run_id | Other runs: $other_count | Trigger: $event"
+          echo "Current run: $current_run_id | Other active runs: $other_count"
 
           if [ "$other_count" -gt 0 ]; then
-            if [ "$event" = "schedule" ]; then
-              # Cron backup — another run exists, not needed
-              echo "Backup not needed. Skipping."
-              echo "skip=true" >> $GITHUB_OUTPUT
-            else
-              # Self-restart or manual — cancel old duplicates, take over
-              echo "Cancelling $other_count duplicate(s)..."
-              for id in $in_progress_ids $queued_ids; do
-                if [ "$id" != "$current_run_id" ]; then
-                  echo "  Cancelling run $id"
-                  gh run cancel "$id" --repo ${{ github.repository }} 2>/dev/null || true
-                fi
-              done
-              sleep 10
-              echo "Duplicates cleared. Proceeding."
-              echo "skip=false" >> $GITHUB_OUTPUT
-            fi
+            echo "Another run already active. Stopping this one."
+            echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "No duplicates. Proceeding."
+            echo "No other runs. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
         env:
