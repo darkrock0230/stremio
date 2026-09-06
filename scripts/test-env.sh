@@ -44,8 +44,8 @@ echo "Configuring engine endpoints..."
 sed -i "s/enginefs.baseUrl = \"http:\/\/\" + ip.address() + \":\" + server.address().port/enginefs.baseUrl = \"https:\/\/stremio.avkstream.qzz.io\"/g" server.js
 
 echo "Tuning engine parameters..."
-sed -i 's/STREAM_TIMEOUT[[:space:]]*=[[:space:]]*[0-9eE.]*/STREAM_TIMEOUT = 1000/g' server.js
-sed -i 's/ENGINE_TIMEOUT[[:space:]]*=[[:space:]]*[0-9eE.]*/ENGINE_TIMEOUT = 1000/g' server.js
+sed -i 's/STREAM_TIMEOUT[[:space:]]*=[[:space:]]*[0-9eE.]*/STREAM_TIMEOUT = 20000/g' server.js
+sed -i 's/ENGINE_TIMEOUT[[:space:]]*=[[:space:]]*[0-9eE.]*/ENGINE_TIMEOUT = 20000/g' server.js
 
 echo "Configuring runtime settings..."
 mkdir -p ~/.stremio-server
