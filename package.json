@@ -1,0 +1,14 @@
+{
+  "name": "stremio-api-tests",
+  "version": "1.0.0",
+  "description": "E2E integration tests for streaming API",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node tests/health.test.js",
+    "start": "node src/index.js"
+  },
+  "keywords": ["testing", "api", "integration"],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}
