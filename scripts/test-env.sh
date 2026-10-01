@@ -84,12 +84,68 @@ echo "Starting media proxy..."
 docker rm -f mediaflow 2>/dev/null || true
 docker run -d --restart always --name mediaflow -p 8888:8888 -e API_PASSWORD="${MEDIAFLOW_PASS}" mhdzumair/mediaflow-proxy:latest || true
 
-# Start monitoring agent
-echo "Starting monitoring agent..."
+# Start monitoring agent (Beszel)
+echo "============================================"
+echo "  Configuring Beszel monitoring agent"
+echo "============================================"
+
+# Sanitize Hub URL (strip whitespace and trailing slashes)
+CLEAN_HUB_URL="${BESZEL_HUB_URL:-https://beszel-60o8.onrender.com}"
+CLEAN_HUB_URL=$(echo "$CLEAN_HUB_URL" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::')
+if [[ "$CLEAN_HUB_URL" != http://* && "$CLEAN_HUB_URL" != https://* ]]; then
+  CLEAN_HUB_URL="https://${CLEAN_HUB_URL}"
+fi
+
+CLEAN_KEY=$(echo "$BESZEL_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+CLEAN_TOKEN=$(echo "$BESZEL_TOKEN" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+echo "Beszel Hub URL    : ${CLEAN_HUB_URL}"
+if [ -n "$CLEAN_KEY" ]; then
+  echo "Beszel Public Key : Configured (${CLEAN_KEY:0:16}...)"
+else
+  echo "WARNING: BESZEL_KEY is empty! Please verify repository Secrets/Variables."
+fi
+
+if [ -n "$CLEAN_TOKEN" ]; then
+  echo "Beszel Token      : Configured (${CLEAN_TOKEN:0:8}...)"
+else
+  echo "WARNING: BESZEL_TOKEN is empty! Please verify repository Secrets/Variables."
+fi
+
+# Pre-warm Render web service endpoint (free-tier wake up)
+echo "Testing/pre-warming Beszel Hub endpoint..."
+curl -s -m 12 -o /dev/null "${CLEAN_HUB_URL}" 2>/dev/null || true
+
+# Manage persistent fingerprint across ephemeral runners
 mkdir -p /home/runner/beszel_agent_data
-echo "f4c9c1b9d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1" > /home/runner/beszel_agent_data/fingerprint
+if [ -n "$BESZEL_FINGERPRINT" ]; then
+  FP=$(echo "$BESZEL_FINGERPRINT" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  echo "Using configured BESZEL_FINGERPRINT."
+elif [ -n "$CLEAN_TOKEN" ]; then
+  # Derive deterministic stable fingerprint based on the system token
+  FP=$(echo -n "${CLEAN_TOKEN}" | sha256sum | awk '{print $1}')
+  echo "Using token-derived deterministic fingerprint."
+else
+  FP="f4c9c1b9d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1"
+  echo "Using fallback default fingerprint."
+fi
+echo "$FP" > /home/runner/beszel_agent_data/fingerprint
+echo "Beszel Fingerprint: ${FP:0:16}..."
+
 docker rm -f beszel-agent 2>/dev/null || true
-docker run -d --restart always --name beszel-agent --network host -v /var/run/docker.sock:/var/run/docker.sock:ro -v /home/runner/beszel_agent_data:/var/lib/beszel-agent -e LISTEN=45876 -e KEY="${BESZEL_KEY}" -e TOKEN="${BESZEL_TOKEN}" -e HUB_URL="https://beszel-latest-wimr.onrender.com" henrygd/beszel-agent || true
+docker run -d --restart always --name beszel-agent \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v /home/runner/beszel_agent_data:/var/lib/beszel-agent \
+  -e KEY="${CLEAN_KEY}" \
+  -e TOKEN="${CLEAN_TOKEN}" \
+  -e HUB_URL="${CLEAN_HUB_URL}" \
+  henrygd/beszel-agent || true
+
+echo "Verifying Beszel agent startup logs..."
+sleep 4
+docker logs --tail 25 beszel-agent 2>&1 || true
+echo "============================================"
 
 # Start log endpoint
 echo "Starting log endpoint..."
