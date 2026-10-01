@@ -7,6 +7,10 @@ on:
   schedule:
     - cron: '25 */6 * * *'
 
+concurrency:
+  group: stremio-e2e-service
+  cancel-in-progress: false
+
 permissions:
   actions: write
   contents: read
@@ -23,18 +27,30 @@ jobs:
         id: preflight
         run: |
           sleep $((RANDOM % 4 + 1))
-          RAW_RUNS=$(gh run list --workflow=ci.yml --status=in_progress --json databaseId --jq "[.[] | select(.databaseId != ${{ github.run_id }})] | length" 2>/dev/null || echo "0")
-          ACTIVE_RUNS=$(echo "$RAW_RUNS" | grep -oE '[0-9]+' | head -n 1)
+          echo "=== Preflight Concurrency Check ==="
+          AUTH_TOKEN="${{ secrets.PAT_TOKEN || vars.PAT_TOKEN }}"
+          if [ -n "$AUTH_TOKEN" ] && ! GH_TOKEN="$AUTH_TOKEN" gh api user >/dev/null 2>&1; then
+            echo "Notice: PAT_TOKEN is invalid or expired. Using GITHUB_TOKEN for read/preflight check."
+            AUTH_TOKEN="${{ github.token }}"
+          fi
+          if [ -z "$AUTH_TOKEN" ]; then
+            AUTH_TOKEN="${{ github.token }}"
+          fi
+
+          RAW_RUNS=$(GH_TOKEN="$AUTH_TOKEN" gh api "repos/${{ github.repository }}/actions/runs?status=in_progress&per_page=20" 2>/dev/null || echo '{"workflow_runs":[]}')
+          ACTIVE_RUNS=$(echo "$RAW_RUNS" | jq -r "[.workflow_runs[]? | select(.id != ${{ github.run_id }} and (.path == \".github/workflows/ci.yml\" or .name == \"CI\"))] | length" 2>/dev/null || echo "0")
           ACTIVE_RUNS="${ACTIVE_RUNS:-0}"
+
           echo "Active concurrent runs detected: ${ACTIVE_RUNS}"
           echo "active_runs=${ACTIVE_RUNS}" >> "$GITHUB_OUTPUT"
+
           if [ "$ACTIVE_RUNS" -gt 0 ] 2>/dev/null; then
-            echo "Another workflow is already running. Skipping this run cleanly to prevent queue collision."
+            echo "Another workflow is already running (${ACTIVE_RUNS} active). Skipping this run cleanly to prevent collision."
           else
             echo "No other active workflow detected. Proceeding with service startup."
           fi
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || vars.PAT_TOKEN || github.token }}
 
       - name: Setup Node.js
         if: steps.preflight.outputs.active_runs == '0'
@@ -52,10 +68,12 @@ jobs:
           chmod +x scripts/test-env.sh
           ./scripts/test-env.sh
         env:
-          CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
-          BESZEL_KEY: ${{ secrets.BESZEL_KEY }}
-          BESZEL_TOKEN: ${{ secrets.BESZEL_TOKEN }}
-          MEDIAFLOW_PASS: ${{ secrets.MEDIAFLOW_PASS }}
+          CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN || vars.CF_TUNNEL_TOKEN }}
+          BESZEL_KEY: ${{ secrets.BESZEL_KEY || vars.BESZEL_KEY }}
+          BESZEL_TOKEN: ${{ secrets.BESZEL_TOKEN || vars.BESZEL_TOKEN }}
+          BESZEL_HUB_URL: ${{ secrets.BESZEL_HUB_URL || vars.BESZEL_HUB_URL }}
+          BESZEL_FINGERPRINT: ${{ secrets.BESZEL_FINGERPRINT || vars.BESZEL_FINGERPRINT }}
+          MEDIAFLOW_PASS: ${{ secrets.MEDIAFLOW_PASS || vars.MEDIAFLOW_PASS }}
 
       - name: Run E2E Test Suite
         if: steps.preflight.outputs.active_runs == '0'
@@ -97,7 +115,7 @@ jobs:
 
           echo "Test cycle completed at $(date -u)"
         env:
-          CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+          CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN || vars.CF_TUNNEL_TOKEN }}
 
       - name: Teardown Background Services
         if: always() && steps.preflight.outputs.active_runs == '0'
@@ -107,6 +125,7 @@ jobs:
           pkill -15 -f "service-runner" 2>/dev/null || true
           pkill -15 -f "node server.js" 2>/dev/null || true
           pkill -15 -f "log_server" 2>/dev/null || true
+          docker stop beszel-agent mediaflow 2>/dev/null || true
           sleep 2
           pkill -9 -f "node server.js" 2>/dev/null || true
           pkill -9 -f "resource-monitor" 2>/dev/null || true
@@ -116,10 +135,33 @@ jobs:
       - name: Trigger Next Run
         if: always() && steps.preflight.outputs.active_runs == '0'
         run: |
+          echo "Evaluating next run trigger..."
+          TOKEN="${{ secrets.PAT_TOKEN || vars.PAT_TOKEN }}"
+          if [ -z "$TOKEN" ]; then
+            echo "Notice: PAT_TOKEN is not configured in Secrets. Automatic chaining skipped; backup cron schedule (25 */6 * * *) will handle subsequent execution."
+            exit 0
+          fi
+
+          if ! GH_TOKEN="$TOKEN" gh api user >/dev/null 2>&1; then
+            echo "Notice: PAT_TOKEN appears invalid or expired. Automatic chaining skipped; backup cron schedule will handle subsequent execution."
+            exit 0
+          fi
+
+          # Check if another workflow run is already queued
+          QUEUED_RUNS=$(GH_TOKEN="$TOKEN" gh api "repos/${{ github.repository }}/actions/runs?status=queued&per_page=10" 2>/dev/null | jq -r "[.workflow_runs[]? | select(.path == \".github/workflows/ci.yml\" or .name == \"CI\")] | length" 2>/dev/null || echo "0")
+          if [ "$QUEUED_RUNS" -gt 0 ]; then
+            echo "A workflow run is already queued (${QUEUED_RUNS} pending). Handover is already scheduled; skipping duplicate dispatch."
+            exit 0
+          fi
+
           echo "Triggering next run..."
-          gh workflow run ci.yml --repo ${{ github.repository }} 2>/dev/null && echo "Next run triggered." || echo "Trigger failed. Cron backup will handle it."
+          if GH_TOKEN="$TOKEN" gh workflow run ci.yml --repo "${{ github.repository }}"; then
+            echo "Next run triggered successfully."
+          else
+            echo "Trigger failed. Cron backup will handle it."
+          fi
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || vars.PAT_TOKEN }}
 
       - name: Generate Test Report
         if: always() && steps.preflight.outputs.active_runs == '0'
