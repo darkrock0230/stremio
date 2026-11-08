@@ -60,7 +60,7 @@ sed -i -E 's/ENGINE_TIMEOUT\s*=\s*[0-9eE.]*/ENGINE_TIMEOUT = 20000/g' server.js
 
 echo "Configuring runtime settings..."
 mkdir -p ~/.stremio-server
-echo '{"cacheSize": 10737418240, "btMaxConnections": 1000, "btHandshakeTimeout": 5000, "btRequestTimeout": 2000, "btConnectionTimeout": 2000, "btDownloadSpeedSoftLimit": 0, "btDownloadSpeedHardLimit": 0, "btMinPeersForStable": 10}' > ~/.stremio-server/server-settings.json
+echo '{"cacheSize": 10737418240, "btMaxConnections": 1000, "btHandshakeTimeout": 10000, "btRequestTimeout": 4000, "btConnectionTimeout": 4000, "btDownloadSpeedSoftLimit": 0, "btDownloadSpeedHardLimit": 0, "btMinPeersForStable": 3}' > ~/.stremio-server/server-settings.json
 
 echo "Installing lifecycle and monitoring scripts..."
 cp "$SCRIPT_DIR/service-runner.sh" /home/runner/stremio/
