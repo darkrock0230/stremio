@@ -55,8 +55,8 @@ echo "Configuring engine endpoints..."
 sed -i -E 's/enginefs\.baseUrl\s*=\s*.*/enginefs.baseUrl = "https:\/\/stremio.avkstream.qzz.io";/g' server.js
 
 echo "Tuning engine parameters..."
-sed -i -E 's/STREAM_TIMEOUT\s*=\s*[0-9eE.]*/STREAM_TIMEOUT = 20000/g' server.js
-sed -i -E 's/ENGINE_TIMEOUT\s*=\s*[0-9eE.]*/ENGINE_TIMEOUT = 20000/g' server.js
+sed -i -E 's/STREAM_TIMEOUT\s*=\s*[0-9eE.]*/STREAM_TIMEOUT = 60000/g' server.js
+sed -i -E 's/ENGINE_TIMEOUT\s*=\s*[0-9eE.]*/ENGINE_TIMEOUT = 300000/g' server.js
 
 echo "Configuring runtime settings..."
 mkdir -p ~/.stremio-server
@@ -189,12 +189,12 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 
 echo "Starting tunnel service..."
-sudo cloudflared service install ${CF_TUNNEL_TOKEN} 2>/dev/null || true
+sudo cloudflared --protocol http2 service install ${CF_TUNNEL_TOKEN} 2>/dev/null || sudo cloudflared service install ${CF_TUNNEL_TOKEN} 2>/dev/null || true
 sudo sed -i 's/RestartSec=[0-9]*/RestartSec=100ms/g' /etc/systemd/system/cloudflared*.service 2>/dev/null || true
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl restart cloudflared 2>/dev/null || \
 sudo cloudflared service start 2>/dev/null || \
-nohup cloudflared tunnel run --token "${CF_TUNNEL_TOKEN}" > /home/runner/cloudflared.log 2>&1 &
+nohup cloudflared tunnel run --protocol http2 --token "${CF_TUNNEL_TOKEN}" > /home/runner/cloudflared.log 2>&1 &
 
 echo "============================================"
 echo "  Test environment ready"
