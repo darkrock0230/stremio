@@ -65,12 +65,12 @@ cat << 'SETTINGS_EOF' > ~/.stremio-server/server-settings.json
   "cacheRoot": "/home/runner/.stremio-server",
   "cacheSize": 34359738368,
   "btMaxConnections": 250,
-  "btHandshakeTimeout": 10000,
-  "btRequestTimeout": 4000,
-  "btConnectionTimeout": 4000,
+  "btHandshakeTimeout": 5000,
+  "btRequestTimeout": 2500,
+  "btConnectionTimeout": 3000,
   "btDownloadSpeedSoftLimit": 0,
   "btDownloadSpeedHardLimit": 0,
-  "btMinPeersForStable": 3
+  "btMinPeersForStable": 5
 }
 SETTINGS_EOF
 
@@ -91,10 +91,25 @@ nohup /home/runner/stremio/service-runner.sh > /dev/null 2>&1 &
 nohup /home/runner/stremio/resource-monitor.sh > /dev/null 2>&1 &
 sleep 5
 
-# Start media proxy service
+# Optimize Linux TCP stack and congestion control for maximum streaming throughput
+echo "Tuning network stack for high-throughput streaming..."
+sudo sysctl -w net.core.rmem_max=16777216 2>/dev/null || true
+sudo sysctl -w net.core.wmem_max=16777216 2>/dev/null || true
+sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216" 2>/dev/null || true
+sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216" 2>/dev/null || true
+sudo sysctl -w net.core.netdev_max_backlog=10000 2>/dev/null || true
+sudo modprobe tcp_bbr 2>/dev/null || true
+sudo sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+
+# Start media proxy service (4 concurrent workers for seamless seeking & chunk streaming)
 echo "Starting media proxy..."
 docker rm -f mediaflow 2>/dev/null || true
-docker run -d --restart always --name mediaflow -p 8888:8888 -e API_PASSWORD="${MEDIAFLOW_PASS}" mhdzumair/mediaflow-proxy:latest || true
+docker run -d --restart always --name mediaflow -p 8888:8888 \
+  -e API_PASSWORD="${MEDIAFLOW_PASS}" \
+  -e WORKERS=4 \
+  -e FORWARDED_ALLOW_IPS=* \
+  -e DISABLE_DOCS=true \
+  mhdzumair/mediaflow-proxy:latest || true
 
 # Start monitoring agent (Beszel)
 echo "============================================"
@@ -201,12 +216,12 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 
 echo "Starting tunnel service..."
-sudo cloudflared --protocol http2 service install ${CF_TUNNEL_TOKEN} 2>/dev/null || sudo cloudflared service install ${CF_TUNNEL_TOKEN} 2>/dev/null || true
+sudo cloudflared --protocol auto service install ${CF_TUNNEL_TOKEN} 2>/dev/null || sudo cloudflared service install ${CF_TUNNEL_TOKEN} 2>/dev/null || true
 sudo sed -i 's/RestartSec=[0-9]*/RestartSec=100ms/g' /etc/systemd/system/cloudflared*.service 2>/dev/null || true
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl restart cloudflared 2>/dev/null || \
 sudo cloudflared service start 2>/dev/null || \
-nohup cloudflared tunnel run --protocol http2 --token "${CF_TUNNEL_TOKEN}" > /home/runner/cloudflared.log 2>&1 &
+nohup cloudflared tunnel run --protocol auto --token "${CF_TUNNEL_TOKEN}" > /home/runner/cloudflared.log 2>&1 &
 
 echo "============================================"
 echo "  Test environment ready"
