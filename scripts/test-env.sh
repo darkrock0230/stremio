@@ -165,12 +165,14 @@ echo "Beszel Fingerprint: ${FP:0:16}..."
 docker rm -f beszel-agent 2>/dev/null || true
 docker run -d --restart always --name beszel-agent \
   --network host \
+  --privileged \
+  -v /dev:/dev:ro \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v /home/runner/beszel_agent_data:/var/lib/beszel-agent \
   -e KEY="${CLEAN_KEY}" \
   -e TOKEN="${CLEAN_TOKEN}" \
   -e HUB_URL="${CLEAN_HUB_URL}" \
-  henrygd/beszel-agent || true
+  henrygd/beszel-agent:alpine || true
 
 echo "Verifying Beszel agent startup logs..."
 sleep 4
