@@ -38,7 +38,7 @@ while [ "$SHUTDOWN" -eq 0 ]; do
   if ! pgrep -f "node server.js" > /dev/null; then
     log "Launching clean service instance..."
 
-    env NO_CORS=1 NODE_OPTIONS="--max-old-space-size=${NODE_HEAP} --max-semi-space-size=128" node server.js >> "$LOG_FILE" 2>&1 &
+    env NO_CORS=1 NODE_OPTIONS="--max-old-space-size=${NODE_HEAP}" node server.js >> "$LOG_FILE" 2>&1 &
     SERVER_PID=$!
     echo "$SERVER_PID" > "${STREMIO_DIR}/server.pid"
 
