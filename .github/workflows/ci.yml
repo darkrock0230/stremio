@@ -125,7 +125,7 @@ jobs:
           pkill -15 -f "service-runner" 2>/dev/null || true
           pkill -15 -f "node server.js" 2>/dev/null || true
           pkill -15 -f "log_server" 2>/dev/null || true
-          docker stop beszel-agent mediaflow 2>/dev/null || true
+          docker stop beszel-agent mediaflow mediaflow-redis 2>/dev/null || true
           sleep 2
           pkill -9 -f "node server.js" 2>/dev/null || true
           pkill -9 -f "resource-monitor" 2>/dev/null || true
