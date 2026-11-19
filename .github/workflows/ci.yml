@@ -58,6 +58,12 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Setup FFmpeg
+        if: steps.preflight.outputs.active_runs == '0'
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+
       - name: Install Dependencies
         if: steps.preflight.outputs.active_runs == '0'
         run: npm install --ignore-scripts 2>/dev/null || true
