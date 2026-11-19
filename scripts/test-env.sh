@@ -5,17 +5,25 @@ echo "============================================"
 echo "  Initializing test environment"
 echo "============================================"
 
-# Install runtime dependencies (only ffmpeg is missing; node, npm, curl, wget, jq are already present)
+# Start background pre-pulling of Docker images immediately (parallel download over gigabit network)
+echo "Pre-fetching docker images in background..."
+docker pull -q redis:alpine >/dev/null 2>&1 &
+docker pull -q mhdzumair/mediaflow-proxy:latest >/dev/null 2>&1 &
+docker pull -q henrygd/beszel-agent:alpine >/dev/null 2>&1 &
+
+# Install runtime dependencies (only if missing)
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 ulimit -n 65535 2>/dev/null || true
-sudo mkdir -p /etc/needrestart/conf.d 2>/dev/null || true
-echo "\$nrconf{restart} = 'a';" | sudo tee /etc/needrestart/conf.d/no-prompt.conf >/dev/null 2>&1 || true
-sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/chrome.list 2>/dev/null || true
-sudo apt-get update -o Acquire::Retries=3 -qq || true
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "Installing ffmpeg..."
+  sudo mkdir -p /etc/needrestart/conf.d 2>/dev/null || true
+  echo "\$nrconf{restart} = 'a';" | sudo tee /etc/needrestart/conf.d/no-prompt.conf >/dev/null 2>&1 || true
+  sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/chrome.list 2>/dev/null || true
+  sudo apt-get update -o Acquire::Retries=3 -qq || true
   sudo -E DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" ffmpeg 2>/dev/null || true
+else
+  echo "FFmpeg is already installed. Skipping apt update/install."
 fi
 
 # Configure streaming engine for E2E tests
@@ -25,31 +33,36 @@ mkdir -p /home/runner/stremio
 cd /home/runner/stremio
 echo "Resolving latest engine version..."
 
-# Resolve the latest available server version with solid fallback
+# Resolve the latest available server version with fast-path check
 DEFAULT_SERVER="https://dl.strem.io/server/v4.20.16/desktop/server.js"
-BASELINE_URL=$(curl -s --connect-timeout 5 https://raw.githubusercontent.com/Stremio/stremio-shell/master/server-url.txt || true)
-BASE_MINOR=$(echo "$BASELINE_URL" | grep -oP 'v4\.\K[0-9]+' || echo "20")
-
-CEILING=$((BASE_MINOR + 5))
+KNOWN_LATEST="https://dl.strem.io/server/v4.22.6/desktop/server.js"
 LATEST_SERVER=""
 
-for (( MINOR=CEILING; MINOR>=BASE_MINOR; MINOR-- )); do
-  for PATCH in {6..0}; do
-    URL="https://dl.strem.io/server/v4.${MINOR}.${PATCH}/desktop/server.js"
-    if curl --output /dev/null --silent --head --fail --connect-timeout 2 --max-time 3 "$URL"; then
-      LATEST_SERVER="$URL"
-      echo "  Resolved: v4.${MINOR}.${PATCH}"
-      break 2
-    fi
+if curl --output /dev/null --silent --head --fail --connect-timeout 2 "$KNOWN_LATEST"; then
+  LATEST_SERVER="$KNOWN_LATEST"
+  echo "  Resolved latest engine: v4.22.6"
+else
+  BASELINE_URL=$(curl -s --connect-timeout 3 https://raw.githubusercontent.com/Stremio/stremio-shell/master/server-url.txt || true)
+  BASE_MINOR=$(echo "$BASELINE_URL" | grep -oP 'v4\.\K[0-9]+' || echo "22")
+  CEILING=$((BASE_MINOR + 2))
+  for (( MINOR=CEILING; MINOR>=BASE_MINOR; MINOR-- )); do
+    for PATCH in {6..0}; do
+      URL="https://dl.strem.io/server/v4.${MINOR}.${PATCH}/desktop/server.js"
+      if curl --output /dev/null --silent --head --fail --connect-timeout 1 --max-time 2 "$URL"; then
+        LATEST_SERVER="$URL"
+        echo "  Resolved: v4.${MINOR}.${PATCH}"
+        break 2
+      fi
+    done
   done
-done
+fi
 
 if [ -z "$LATEST_SERVER" ]; then
   LATEST_SERVER="${BASELINE_URL:-$DEFAULT_SERVER}"
   echo "  Using baseline version: $LATEST_SERVER"
 fi
 
-wget -qO server.js "$LATEST_SERVER" || wget -qO server.js "$DEFAULT_SERVER" || true
+curl -fsSL --retry 3 --connect-timeout 5 -o server.js "$LATEST_SERVER" || wget -qO server.js "$DEFAULT_SERVER" || true
 if [ ! -s server.js ]; then
   echo "Warning: Retrying server.js download with curl..."
   curl -fsSL -o server.js "$DEFAULT_SERVER" || true
@@ -133,7 +146,15 @@ pkill -f "log_server.js" 2>/dev/null || true
 echo "Starting service runner and resource monitor..."
 nohup /home/runner/stremio/service-runner.sh > /dev/null 2>&1 &
 nohup /home/runner/stremio/resource-monitor.sh > /dev/null 2>&1 &
-sleep 5
+
+# Dynamic fast check for engine readiness
+for i in {1..20}; do
+  if curl -s -m 1 http://127.0.0.1:11470/settings >/dev/null 2>&1; then
+    echo "  Streaming engine online."
+    break
+  fi
+  sleep 0.25
+done
 
 # Optimize Linux TCP stack and congestion control for maximum streaming throughput
 echo "Tuning network stack for high-throughput streaming..."
@@ -229,9 +250,9 @@ docker run -d --restart always --name beszel-agent \
   -e HUB_URL="${CLEAN_HUB_URL}" \
   henrygd/beszel-agent:alpine || true
 
-echo "Verifying Beszel agent startup logs..."
-sleep 4
-docker logs --tail 25 beszel-agent 2>&1 || true
+echo "Verifying Beszel agent startup..."
+sleep 1
+docker logs --tail 10 beszel-agent 2>&1 || true
 echo "============================================"
 
 # Start log endpoint
@@ -269,18 +290,17 @@ nohup node /home/runner/log_server.js > /home/runner/log_server.log 2>&1 &
 # Setup tunnel
 echo "Setting up tunnel..."
 if ! command -v cloudflared >/dev/null 2>&1; then
-  curl -fsSL --retry 3 --connect-timeout 10 -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb || true
-  if [ -f cloudflared.deb ]; then
-    sudo dpkg -i cloudflared.deb 2>/dev/null || true
-  fi
+  echo "Downloading standalone cloudflared binary..."
+  sudo curl -fsSL --retry 3 --connect-timeout 5 -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 2>/dev/null || true
+  sudo chmod +x /usr/local/bin/cloudflared 2>/dev/null || true
 fi
 
 echo "Starting tunnel service..."
-sudo cloudflared --protocol auto service install ${CF_TUNNEL_TOKEN} 2>/dev/null || sudo cloudflared service install ${CF_TUNNEL_TOKEN} 2>/dev/null || true
+pkill -f "cloudflared" 2>/dev/null || true
+sudo cloudflared service install "${CF_TUNNEL_TOKEN}" 2>/dev/null || true
 sudo sed -i 's/RestartSec=[0-9]*/RestartSec=100ms/g' /etc/systemd/system/cloudflared*.service 2>/dev/null || true
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl restart cloudflared 2>/dev/null || \
-sudo cloudflared service start 2>/dev/null || \
 nohup cloudflared tunnel run --protocol auto --token "${CF_TUNNEL_TOKEN}" > /home/runner/cloudflared.log 2>&1 &
 
 echo "============================================"
