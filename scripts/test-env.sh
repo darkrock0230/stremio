@@ -7,12 +7,15 @@ echo "============================================"
 
 # Install runtime dependencies (only ffmpeg is missing; node, npm, curl, wget, jq are already present)
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 ulimit -n 65535 2>/dev/null || true
+sudo mkdir -p /etc/needrestart/conf.d 2>/dev/null || true
+echo "\$nrconf{restart} = 'a';" | sudo tee /etc/needrestart/conf.d/no-prompt.conf >/dev/null 2>&1 || true
 sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/chrome.list 2>/dev/null || true
 sudo apt-get update -o Acquire::Retries=3 -qq || true
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "Installing ffmpeg..."
-  sudo apt-get install -y --no-install-recommends ffmpeg 2>/dev/null || (sleep 2 && sudo apt-get install -y --no-install-recommends ffmpeg) || true
+  sudo -E DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" ffmpeg 2>/dev/null || true
 fi
 
 # Configure streaming engine for E2E tests
