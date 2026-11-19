@@ -7,6 +7,7 @@ echo "============================================"
 
 # Install runtime dependencies (only ffmpeg is missing; node, npm, curl, wget, jq are already present)
 export DEBIAN_FRONTEND=noninteractive
+ulimit -n 65535 2>/dev/null || true
 sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/chrome.list 2>/dev/null || true
 sudo apt-get update -o Acquire::Retries=3 -qq || true
 if ! command -v ffmpeg >/dev/null 2>&1; then
@@ -54,13 +55,49 @@ fi
 echo "Configuring engine endpoints..."
 sed -i -E 's/enginefs\.baseUrl\s*=\s*.*/enginefs.baseUrl = "https:\/\/stremio.avkstream.qzz.io";/g' server.js
 
-echo "Tuning engine parameters..."
-sed -i -E 's/STREAM_TIMEOUT\s*=\s*[0-9eE.]*/STREAM_TIMEOUT = 60000/g' server.js
-sed -i -E 's/ENGINE_TIMEOUT\s*=\s*[0-9eE.]*/ENGINE_TIMEOUT = 300000/g' server.js
-sed -i -E 's/max:\s*(150|200|250)/max: 350/g' server.js
-sed -i -E 's/min:\s*40/min: 80/g' server.js
-sed -i -E 's/this\._critical\s*=\s*0\s*\|\s*Math\.min\(1048576\s*\/\s*pieceLength,\s*4\)/this._critical = Math.max(8, Math.min(16, Math.ceil(33554432 \/ pieceLength)))/g' server.js
-sed -i -E 's/flood:\s*0,/flood: 104857600,/g' server.js
+echo "Hyper-tuning engine parameters for maximum line speed and zero latency..."
+python3 - << 'PY_TUNER'
+import re
+
+with open("server.js", "r", encoding="utf-8") as f:
+    code = f.read()
+
+# 1. Stream & engine timeouts
+code = re.sub(r'STREAM_TIMEOUT\s*=\s*[0-9eE.]*;?', 'STREAM_TIMEOUT = 60000;', code)
+code = re.sub(r'ENGINE_TIMEOUT\s*=\s*[0-9eE.]*;?', 'ENGINE_TIMEOUT = 300000;', code)
+
+# 2. Swarm discovery capacity (peerSearch: min 100, max 400 peers)
+code = re.sub(r'max:\s*(150|200|250)', 'max: 400', code)
+code = re.sub(r'min:\s*40', 'min: 100', code)
+
+# 3. Parallel piece burst window for instant seeking (32MB window: 8 to 16 pieces)
+old_crit = 'this._critical = 0 | Math.min(1048576 / pieceLength, 4)'
+new_crit = 'this._critical = Math.max(8, Math.min(16, Math.ceil(33554432 / pieceLength)))'
+code = code.replace(old_crit, new_crit)
+
+# 4. Uncapped burst flood (100MB flood on start to prevent 500ms debounce pauses)
+code = re.sub(r'flood:\s*0,', 'flood: 104857600,', code)
+
+# 5. Pipelined requests per peer (multiplies block pipeline from 5 to 35 requests in flight)
+p = code.find('getRequestsNumber = function()')
+if p != -1:
+    end_p = code.find('}, shufflePriority', p)
+    if end_p != -1:
+        code = code[:p] + 'getRequestsNumber = function() { return 35; }' + code[end_p+1:]
+
+# 6. Aggressive hotswap of slow peers (rapidly dumps peers crawling under 256 KB/s)
+code = code.replace('SPEED_THRESHOLD = 3 * piece.BLOCK_SIZE', 'SPEED_THRESHOLD = 16 * piece.BLOCK_SIZE')
+
+# 7. Asynchronous SSD read concurrency (bagpipe 2 -> 8)
+code = code.replace('this._readpipe = new bagpipe(2)', 'this._readpipe = new bagpipe(8)')
+
+# 8. Disable Nagle algorithm on streaming HTTP sockets (flush video pieces with zero network delay)
+code = code.replace('res.setHeader("Cache-Control", "max-age=0, no-cache")', 'res.socket && res.socket.setNoDelay && res.socket.setNoDelay(true); res.setHeader("X-Accel-Buffering", "no"); res.setHeader("Cache-Control", "max-age=0, no-cache")')
+
+with open("server.js", "w", encoding="utf-8") as f:
+    f.write(code)
+print("Engine core hyper-tuned successfully!")
+PY_TUNER
 
 echo "Configuring runtime settings for balanced SSD caching + RAM sliding window..."
 mkdir -p ~/.stremio-server/stremio-cache
@@ -68,7 +105,7 @@ cat << 'SETTINGS_EOF' > ~/.stremio-server/server-settings.json
 {
   "cacheRoot": "/home/runner/.stremio-server",
   "cacheSize": 68719476736,
-  "btMaxConnections": 350,
+  "btMaxConnections": 400,
   "btHandshakeTimeout": 2000,
   "btRequestTimeout": 1200,
   "btConnectionTimeout": 1800,
@@ -108,6 +145,7 @@ sudo sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_fin_timeout=15 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535" 2>/dev/null || true
 sudo modprobe tcp_bbr 2>/dev/null || true
 sudo sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
