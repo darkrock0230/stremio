@@ -109,8 +109,8 @@ cat << 'SETTINGS_EOF' > ~/.stremio-server/server-settings.json
   "btHandshakeTimeout": 2000,
   "btRequestTimeout": 1200,
   "btConnectionTimeout": 1800,
-  "btDownloadSpeedSoftLimit": 1073741824,
-  "btDownloadSpeedHardLimit": 1073741824,
+  "btDownloadSpeedSoftLimit": 9007199254740991,
+  "btDownloadSpeedHardLimit": 9007199254740991,
   "btMinPeersForStable": 3
 }
 SETTINGS_EOF
