@@ -57,7 +57,10 @@ sed -i -E 's/enginefs\.baseUrl\s*=\s*.*/enginefs.baseUrl = "https:\/\/stremio.av
 echo "Tuning engine parameters..."
 sed -i -E 's/STREAM_TIMEOUT\s*=\s*[0-9eE.]*/STREAM_TIMEOUT = 60000/g' server.js
 sed -i -E 's/ENGINE_TIMEOUT\s*=\s*[0-9eE.]*/ENGINE_TIMEOUT = 300000/g' server.js
-sed -i -E 's/max:\s*150/max: 250/g' server.js
+sed -i -E 's/max:\s*(150|200|250)/max: 350/g' server.js
+sed -i -E 's/min:\s*40/min: 80/g' server.js
+sed -i -E 's/this\._critical\s*=\s*0\s*\|\s*Math\.min\(1048576\s*\/\s*pieceLength,\s*4\)/this._critical = Math.max(8, Math.min(16, Math.ceil(33554432 \/ pieceLength)))/g' server.js
+sed -i -E 's/flood:\s*0,/flood: 104857600,/g' server.js
 
 echo "Configuring runtime settings for balanced SSD caching + RAM sliding window..."
 mkdir -p ~/.stremio-server/stremio-cache
@@ -65,13 +68,13 @@ cat << 'SETTINGS_EOF' > ~/.stremio-server/server-settings.json
 {
   "cacheRoot": "/home/runner/.stremio-server",
   "cacheSize": 68719476736,
-  "btMaxConnections": 250,
-  "btHandshakeTimeout": 4000,
-  "btRequestTimeout": 2000,
-  "btConnectionTimeout": 2500,
+  "btMaxConnections": 350,
+  "btHandshakeTimeout": 2000,
+  "btRequestTimeout": 1200,
+  "btConnectionTimeout": 1800,
   "btDownloadSpeedSoftLimit": 1073741824,
   "btDownloadSpeedHardLimit": 1073741824,
-  "btMinPeersForStable": 5
+  "btMinPeersForStable": 3
 }
 SETTINGS_EOF
 
@@ -98,18 +101,29 @@ sudo sysctl -w net.core.rmem_max=16777216 2>/dev/null || true
 sudo sysctl -w net.core.wmem_max=16777216 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216" 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216" 2>/dev/null || true
-sudo sysctl -w net.core.netdev_max_backlog=10000 2>/dev/null || true
+sudo sysctl -w net.core.netdev_max_backlog=16384 2>/dev/null || true
+sudo sysctl -w net.core.somaxconn=8192 2>/dev/null || true
+sudo sysctl -w net.ipv4.tcp_max_syn_backlog=8192 2>/dev/null || true
+sudo sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true
+sudo sysctl -w net.ipv4.tcp_fin_timeout=15 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
 sudo modprobe tcp_bbr 2>/dev/null || true
+sudo sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
 sudo sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
 
-# Start media proxy service (4 concurrent workers for seamless seeking & chunk streaming)
+# Start local high-speed Redis container for MediaFlow HEAD & Segment Caching
+echo "Starting Redis cache for media proxy..."
+docker rm -f mediaflow-redis 2>/dev/null || true
+docker run -d --restart always --name mediaflow-redis -p 6379:6379 redis:alpine || true
+
+# Start media proxy service (8 concurrent workers + Redis cache for instant HEAD/Range proxying)
 echo "Starting media proxy..."
 docker rm -f mediaflow 2>/dev/null || true
 docker run -d --restart always --name mediaflow -p 8888:8888 \
   -e API_PASSWORD="${MEDIAFLOW_PASS}" \
-  -e WORKERS=4 \
+  -e WORKERS=8 \
+  -e REDIS_URL="redis://127.0.0.1:6379" \
   -e FORWARDED_ALLOW_IPS=* \
   -e DISABLE_DOCS=true \
   mhdzumair/mediaflow-proxy:latest || true
