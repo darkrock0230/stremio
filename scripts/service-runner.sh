@@ -7,10 +7,10 @@ LOG_FILE="${STREMIO_DIR}/stremio.log"
 mkdir -p "$STREMIO_DIR"
 cd "$STREMIO_DIR" || exit 1
 
-# High-Performance Node heap cap (3072 MB = 3 GB) for active sliding-window playback on 16GB RAM.
+# High-Performance Node heap cap (3584 MB = 3.5 GB) for active sliding-window playback on 16GB RAM.
 # Allows rapid parallel piece buffering while leaving 12+ GB free for OS & Linux page cache.
 TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-NODE_HEAP=3072
+NODE_HEAP=3584
 
 log() {
   echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] [SUPERVISOR] $1" >> "$LOG_FILE"
@@ -37,7 +37,7 @@ while [ "$SHUTDOWN" -eq 0 ]; do
   if ! pgrep -f "node server.js" > /dev/null; then
     log "Launching clean service instance..."
 
-    env NO_CORS=1 NODE_OPTIONS="--max-old-space-size=${NODE_HEAP}" node server.js >> "$LOG_FILE" 2>&1 &
+    env NO_CORS=1 NODE_OPTIONS="--max-old-space-size=${NODE_HEAP} --max-semi-space-size=128" node server.js >> "$LOG_FILE" 2>&1 &
     SERVER_PID=$!
     echo "$SERVER_PID" > "${STREMIO_DIR}/server.pid"
 
