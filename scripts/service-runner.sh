@@ -5,6 +5,7 @@
 STREMIO_DIR="/home/runner/stremio"
 LOG_FILE="${STREMIO_DIR}/stremio.log"
 mkdir -p "$STREMIO_DIR"
+ulimit -n 65535 2>/dev/null || true
 cd "$STREMIO_DIR" || exit 1
 
 # High-Performance Node heap cap (3584 MB = 3.5 GB) for active sliding-window playback on 16GB RAM.
