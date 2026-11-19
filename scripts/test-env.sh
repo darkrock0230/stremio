@@ -78,9 +78,9 @@ import re
 with open("server.js", "r", encoding="utf-8") as f:
     code = f.read()
 
-# 1. Stream & engine timeouts
-code = re.sub(r'STREAM_TIMEOUT\s*=\s*[0-9eE.]*;?', 'STREAM_TIMEOUT = 60000;', code)
-code = re.sub(r'ENGINE_TIMEOUT\s*=\s*[0-9eE.]*;?', 'ENGINE_TIMEOUT = 300000;', code)
+# 1. Stream & engine timeouts (comma-safe without trailing semicolons)
+code = re.sub(r'STREAM_TIMEOUT\s*=\s*[0-9eE.]*', 'STREAM_TIMEOUT = 60000', code)
+code = re.sub(r'ENGINE_TIMEOUT\s*=\s*[0-9eE.]*', 'ENGINE_TIMEOUT = 300000', code)
 
 # 2. Swarm discovery capacity (peerSearch: min 100, max 400 peers)
 code = re.sub(r'max:\s*(150|200|250)', 'max: 400', code)
